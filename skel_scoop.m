@@ -5,9 +5,24 @@ function [Tree, Soma_PixelInd, image_bin] = skel_scoop(image_input, varargin)
 
 % Input
 % image_input = 2D array representing the image.
+
+% Output
+% Tree = structure containing all branches of the neuronal tree. Each entry
+%       in the structure corresponds to one branch.
+%       The fields of Tree are:
+%       1) PointsPos = Positions of the points forming the branch.
+%       2) PointsDiameter = Approximate diameter of the branch at each point position.
+%       3) Length = Number of segments that form the branch.
+%       4) Length_dim = Total dimensionfull length of the branch (given in units of pixels).
+%       5) ParentID = ID of the parent branch.
+%       6) SiblingID = ID of the sibling (or sister) branch.
+%       7) ChildrenID = IDs of the children (or daughter) branches.
+%       8) Depth = Depth of the branch in the tree structure. The root branches have a depth of 0.
+% Soma_PixelInd = 2D index of the Soma pixel.
+% image_bin = binarized version of the input image used for scooping.
 %% Parse optional parameters
 p = inputParser;
-addParameter(p, 'SomaPos', [0, 0]);
+addParameter(p, 'SomaPos', [0, 0]); % Fix the position of the Soma in the output structure.
 addParameter(p, 'Seed', 'Auto'); % Index position of the seed.
 addParameter(p, 'Close', false); % Perform morphological closure before tracing. Useful to remove holes.
 addParameter(p, 'Plots', nargout==0); % Plot intermediate plots detailing the skeletonization steps.
@@ -780,12 +795,13 @@ elseif isa(options.L_min, 'char') && strcmp(options.L_min, 'local_diameter')
         Tree = delete_branches(Tree, ShortbranchesID);
     end
 end
-%% Remove unecessary Tree fields.
+%% Remove unecessary Tree fields and order the remaining fields.
 Tree = rmfield(Tree, 'Points_ClusterID');
 
 if isfield(Tree,'Length_thres')
     Tree = rmfield(Tree, 'Length_thres');
 end
+Tree = orderfields(Tree,{'PointsPos','PointsDiameter','Length','Length_dim','ParentID','SiblingID','ChildrenID','Depth'});
 %% Center Tree at the Soma.
 PositionOffset = options.SomaPos - SomaPos;
 for i = 1:numel(Tree)
@@ -795,6 +811,6 @@ end
 Tree = resample_branches(Tree, options.Branch_nodes_distance);
 %% Plot the final tree structure overlaid on top of the image.
 if options.Plots && exist('plottree',2)
-    plottree(Tree, 'Lengthscale', 1, 'BackgroundImage', {image_input, 1, Soma_PixelInd});
+    %plottree(Tree, 'Lengthscale', 1, 'BackgroundImage', {image_input, 1, Soma_PixelInd});
 end
 end
