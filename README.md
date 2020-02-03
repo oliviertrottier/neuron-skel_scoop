@@ -34,4 +34,4 @@ This algorithm was tested on a set of 16 bit high-contrast images. For such high
 
 
 ## Acknowledgement
-We thank Sonal Shree for providing us with images of Drosophila Class IV neurons.
+We thank Sonal Shree ([Google Scholar](https://scholar.google.com/citations?user=9wAaRw8AAAAJ&hl=en), [ORCID](https://orcid.org/0000-0002-5665-8157)) for providing us with images of Drosophila Class IV neurons.
