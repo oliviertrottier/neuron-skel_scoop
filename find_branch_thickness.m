@@ -1,10 +1,13 @@
-function [thickness, theta_perp, is_cross] = find_branch_thickness(pixel_positions, image_intensity, varargin)
+function [thickness, theta_perp, is_cross] = find_branch_thickness(pixel_indices, image_intensity, varargin)
 % Function to find the branch radius and perpendicular angle at given
 % positions in an image.
 
 % Input
-% pixel_positions = n x 2 array where a row correspond to the row and column
-%                         index of the given position in the image. Non-integer positions are rounded.
+% pixel_indices = pixel indices where the thickness will be computed.
+%                 Each row corresponds to a different position.
+%                 If the input array is an n x 2 array, subscript indices are assumed.
+%                 If the input array is an n x 1 array, linear indices are assumed.
+%                 Non-integer positions are rounded.
 % image_intensity = pixel intensity of the image.
 
 % Output
@@ -12,6 +15,25 @@ function [thickness, theta_perp, is_cross] = find_branch_thickness(pixel_positio
 % theta_perp = angle of the direction perpendicular to the branch at each input position.
 % is_cross = logical array indicating if the input pixel position is on an
 %            edge.
+%% Parse input
+image_size = size(image_intensity);
+switch size(pixel_indices,2)
+    case 1
+        % Check that the linear indices are not out of bound.
+        assert(all(pixel_indices>=1) & all(pixel_indices<=prod(image_size)),'Pixel indices are out of bounds');
+        
+        % Convert the pixel indices to subscripted indices.
+        pixel_indices = [mod(pixel_indices - 1,image_size(1))+1 ceil(pixel_indices/image_size(1))];
+    case 2
+        % Check that the subscript indices are within the range of the
+        % image size.
+        assert(all(pixel_indices(:,1)>=1) &...
+            all(pixel_indices(:,1)<=image_size(1)) &...
+            all(pixel_indices(:,2)>=1) &...
+            all(pixel_indices(:,2)<=image_size(2)),'Pixel indices are out of bounds');
+    otherwise
+        error('Pixel indices must be a N x 1 or N x 2 array');
+end
 %% Parse optional parameters
 p = inputParser;
 % Statistic to compute with the thickness of all line segments at each given point.
@@ -22,7 +44,6 @@ parse(p, varargin{:});
 options = p.Results;
 %% Define the pixel coordinates along each line segments.
 statistic_func = str2func(options.Statistic);
-image_size = size(image_intensity);
 
 r_max = 100;
 dr = .01*r_max;
@@ -65,7 +86,7 @@ image_fine_size = size(image_intensity_fine);
 
 % Find the new lines' indices in terms of the upsampled image.
 lines_pixel_coordinates_fine = round(lines_pixel_coordinates*Upsampling_factor);
-pixel_positions_fine = round(pixel_positions*Upsampling_factor);
+pixel_positions_fine = round(pixel_indices*Upsampling_factor);
 
 % Determine the intensity threshold that will be used to determine if a
 % pixel is part of a branch.
