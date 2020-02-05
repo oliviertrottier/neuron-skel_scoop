@@ -1,4 +1,4 @@
-function [Tree, Soma_PixelInd, image_bin] = skel_scoop(image_input, varargin)
+function [Tree, Soma_PixelInd, image_bin, soma_mask] = skel_scoop(image_input, varargin)
 % Function to skeletonize a neuron by scooping voxels. The algorithm is
 % based the voxel scooping algorithm developped by
 % Rodriguez, Alfredo, Douglas B. Ehlenberger, Patrick R. Hof, and Susan L. Wearne. “Three-Dimensional Neuron Tracing by Voxel Scooping.” Journal of Neuroscience Methods 184, no. 1 (October 30, 2009): 169–75. https://doi.org/10.1016/j.jneumeth.2009.07.021.
@@ -20,6 +20,7 @@ function [Tree, Soma_PixelInd, image_bin] = skel_scoop(image_input, varargin)
 %       8) Depth = Depth of the branch in the tree structure. The root branches have a depth of 0.
 % Soma_PixelInd = 2D index of the Soma pixel.
 % image_bin = binarized version of the input image used for scooping.
+% soma_mask = logical array representing soma pixels.
 %% Parse optional parameters
 p = inputParser;
 addParameter(p, 'SomaPos', [0, 0]); % Fix the position of the Soma in the output structure.
@@ -36,80 +37,120 @@ addParameter(p, 'Branch_nodes_distance', 1); % Distance between two nodes of a b
 addParameter(p, 'Binarization_method', 'local_threshold'); % Threshold for local thresholding (expressed as a proportion of the local mean).
 addParameter(p, 'Binarize_only', false); % Return only the binarized image.
 addParameter(p, 'Mean_filter_thresh', 1.225); % Threshold for local mean thresholding (expressed as a proportion of the local mean).
-addParameter(p, 'Soma_mask', 0); % Calculate a mask that encloses the soma. (Not implemented).
 parse(p, varargin{:});
 options = p.Results;
-%% Find the location of the seed (Soma).
+%% Preliminary parameters
 image_size = size(image_input);
+image_adj = imadjust(image_input); % Used for plotting.
 image_intmax = double(intmax(class(image_input)));
+%% Find the mask that encloses the soma.
+% Binarize the image globally to retain the brightest 5% pixels.
+if islogical(image_input)
+    image_bin_bright = image_input;
+else
+    saturation_levels = stretchlim(image_input,0.05);
+    bright_thres = min(0.99,saturation_levels(2));
+    image_bin_bright = imbinarize(image_input,bright_thres);
+end
+
+% Calculate the gray-weigthed distance transform of the bright pixel mask.
+image_GWDT = double(bwdist(~image_bin_bright));
+
+% Find an approximate soma mask by thresholding the GWDT image. This mask
+% underestimates the size of the soma since only pixels away from the
+% background are retained.
+[GWDT_ecdf,GWDT_ecdf_x] = ecdf(image_GWDT(image_GWDT>0));
+GWDT_thresh = round(GWDT_ecdf_x(find(GWDT_ecdf > 0.99,1)));
+soma_mask_approx = image_GWDT >= GWDT_thresh;
+
+% Dilate the approximate soma mask with a disk structural element whose
+% radius is the same value as the GWDT threshold. Consequently, the
+% dilation will recover pixels that are between the approximate soma mask
+% and the background.
+disk_SE = strel('disk',GWDT_thresh);
+%soma_mask_approx = imclose(soma_mask_approx,disk_SE);
+soma_mask = imdilate(soma_mask_approx,disk_SE) & image_bin_bright;
+
+% Add connected components that are contiguous to the soma mask. This is
+% sometimes necessary when the dilation is not large enough to fill all the
+% neighboring pixels.
+Neighbour_comp_size_max = 50;
+
+% Find the connected components in the bright pixel binary image which are
+% not part of the soma mask.
+image_bin_bright_no_soma = image_bin_bright & ~soma_mask;
+im_bin_bright_no_soma_conn_comp = bwconncomp(image_bin_bright_no_soma,8);
+im_bright_no_soma_label_matrix = labelmatrix(im_bin_bright_no_soma_conn_comp);
+
+% Dilate the soma mask with a disk of radius 1 and use the dilated to pick
+% up the labels of the connected components contiguous to the soma mask.
+soma_mask_dilated = imdilate(soma_mask,strel('disk',1));
+soma_mask_neighbor_labels = unique(im_bright_no_soma_label_matrix(soma_mask_dilated));
+
+% Threshold the neighboring connected components on their number of
+% pixels and add the remaining components to the mask.
+im_bin_bright_no_soma_conn_comp_N_pixels = cellfun(@numel,im_bin_bright_no_soma_conn_comp.PixelIdxList);
+Labels = 1:im_bin_bright_no_soma_conn_comp.NumObjects;
+Neighbour_labels_to_fill = Labels(ismember(Labels,soma_mask_neighbor_labels) & im_bin_bright_no_soma_conn_comp_N_pixels <= Neighbour_comp_size_max);
+soma_mask = soma_mask | ismember(im_bright_no_soma_label_matrix,Neighbour_labels_to_fill);
+
+% The GWDT thresholding followed by dilation can sometimes pick up regions
+% that contain large branches. To remove these regions, find the connected 
+% components in the soma mask and keep only those that within 20% of the
+% maximum size.
+soma_mask_conn_comp = bwconncomp(soma_mask);
+soma_mask_conn_comp_N_pixels = cellfun(@numel,soma_mask_conn_comp.PixelIdxList);
+soma_min_size = round(0.8*max(soma_mask_conn_comp_N_pixels));
+soma_labels = 1:soma_mask_conn_comp.NumObjects;
+soma_labels = soma_labels(soma_mask_conn_comp_N_pixels >= soma_min_size);
+
+soma_mask_labels = labelmatrix(soma_mask_conn_comp);
+soma_mask = ismember(soma_mask_labels,soma_labels);
+
+% Ensure that exactly 1 soma region is found in the mask.
+N_soma = numel(soma_labels);
+if N_soma < 1
+    error('A soma could not be found'); 
+elseif N_soma > 1
+    % If there are more than one soma, choose the one
+    % whose centroid is closest to the center of the image.
+    disp('More than 1 soma was found. The most centered one is chosen.')
+    
+    Somas_conn_comp = bwconncomp(soma_mask);
+    Somas_conn_comp_props = regionprops(Somas_conn_comp);
+    Image_center = round(image_size/2);
+    for i=1:N_soma
+        Somas_conn_comp_props(i).DistanceToCenter = sqrt(sum((Somas_conn_comp_props(i).Centroid - Image_center).^2,2));
+    end
+    [~,Soma_unique_label] = min([Somas_conn_comp_props.DistanceToCenter]);
+    soma_mask = labelmatrix(Somas_conn_comp) == Soma_unique_label;
+end
+
+% Plot the soma mask overlaid on top of the image input.
+if options.Plots
+    figure;imshowpair(image_adj,soma_mask);
+end
+%% Find the location of the seed (Soma).
 if isa(options.Seed, 'char') && strcmp(options.Seed, 'Auto')
     if islogical(image_input)
         % If the image is a logical, use the gray-weigthed distance
         % transform to find the pixel that is the furthest from background pixels.
         image_GWDT = bwdist(~image_input);
         [~, seed_ind] = max(image_GWDT(:));
-        seed_ind = [mod(seed_ind-1, image_size(1))+1, ceil(seed_ind/image_size(1))];
-        
     else
-        % If the image is not binary, binarize the image to retain bright
-        % pixels. Mean-filter the binary image and choose the pixel with the highest
-        % intensity.
-        
-        % Binarize the image globally to retain a minimum of 5% bright pixels.
-        saturation_levels = stretchlim(image_input,0.05);
-        bright_thres = min(0.99,saturation_levels(2));
-        image_bin_bright = imbinarize(image_input,bright_thres);
-        
-        % Fill holes in the bright binary image. This is sometimes
-        % necessary when soma centers have lower pixel intensities in their
-        % center.
-        %image_bin_bright = imfill(image_bin_bright,'holes');
-        
-        % Calculate the gray-weigthed image transform.
-        image_GWDT = bwdist(~image_bin_bright);
-        
-        % Theshold the GWDT image to find a mask that identifies potential soma positions. The
-        % center of soma are usually deeper than 10 pixels.
-        Soma_depth_min = 10;
-        soma_mask = image_GWDT > Soma_depth_min;
-        
-        % Find all the connected components in the soma_mask.
-        Soma_CC = bwconncomp(soma_mask);
-        
-        % Threshold the soma candidate region using their Area.
-        CC_N_pixels = cellfun(@numel,Soma_CC.PixelIdxList);
-        Soma_CC.PixelIdxList = Soma_CC.PixelIdxList(CC_N_pixels > 500);
-        Soma_CC.NumObjects = numel(Soma_CC.PixelIdxList);
-        N_soma = Soma_CC.NumObjects;
-        
-        if N_soma < 0
-            error('A soma could not be found');
-        elseif N_soma > 1
-            % If there are
-            % more than one connected component, choose the connected component
-            % whose centroid is closest to the center of the image.
-            disp('More than 1 seed was found. The most centered one is chosen.')
-            
-            CC_props = regionprops(Soma_CC);
-            Image_center = round(image_size/2);
-            for i=1:N_soma
-                CC_props(i).DistanceToSeed = sqrt(sum((CC_props(i).Centroid - Image_center).^2,2));
-            end
-            [~,Soma_ind] = min([CC_props.DistanceToSeed]);
-            Soma_Region_pixel_ind = Soma_CC.PixelIdxList{Soma_ind};
-            [~, seed_ind] = max(image_GWDT(Soma_Region_pixel_ind));
-            seed_ind = Soma_Region_pixel_ind(seed_ind);
-        else
-            [~, seed_ind] = max(image_GWDT(:));
-        end
-        
-        % Change the seed linear index to a 2D index.
-        seed_ind = [mod(seed_ind-1, image_size(1))+1, ceil(seed_ind/image_size(1))];
+        % If the image is not binary, find the deepest pixel in the soma
+        % mask and use this pixel as the seed. To find the deepest pixel, 
+        % calculate the gray-weigthed image transform of the soma mask.
+        soma_mask_GWDT = bwdist(~soma_mask);
+        [~, seed_ind] = max(soma_mask_GWDT(:));
     end
+    
+    % Change the seed linear index to a 2D index.
+    seed_ind = [mod(seed_ind-1, image_size(1))+1, ceil(seed_ind/image_size(1))];
     
     % Plot the image with the seed mask.
     if options.Plots
-        seed_mask = false(img_size);
+        seed_mask = false(image_size);
         seed_mask(seed_ind(1),seed_ind(2)) = true;
         figure;imshowpair(image_input,seed_mask);
     end
@@ -264,7 +305,6 @@ if ~islogical(image_input)
             otsu_thresh = otsuthresh(bincounts);
             global_threshold = otsu_thresh * max_pixel_val;
             threshold_matrix = global_threshold/double(intmax(class(image_input)))*ones(size(im_filtered));
-            
         case 'global_multi_thresh'
             %% Define the neuron mask as all pixels whose intensity is above a global threshold defined by otsu's multi-threshold method.
             multi_thresholds = multithresh(im_filtered,2);
@@ -338,26 +378,6 @@ if options.Binarize_only
     Tree = [];
     Soma_PixelInd = [];
     return;
-end
-%% Find the soma mask.
-if options.Soma_mask
-    error('(under development)');
-    [soma_candidate_row,soma_candidate_col] = ndgrid(-50:50,-50:50);
-    soma_candidate_pixel_ind = [soma_candidate_row(:)+seed_ind(1), soma_candidate_col(:)+seed_ind(2)];
-    soma_candidate_pixel_lin_ind = soma_candidate_pixel_ind(:,1) + (soma_candidate_pixel_ind(:,2)-1)*image_size(1);
-    
-    soma_candidate_pixel_ind = soma_candidate_pixel_ind(image_bin(soma_candidate_pixel_lin_ind),:);
-    soma_candidate_pixel_lin_ind = soma_candidate_pixel_lin_ind(image_bin(soma_candidate_pixel_lin_ind));
-    soma_candidate_thickness = find_branch_thickness(soma_candidate_pixel_ind, image_bin);
-    
-    image_bin_soma = image_bin((-50:50) + seed_ind(1),(-50:50) + seed_ind(2));
-    image_thickness = zeros(image_size);
-    image_thickness(soma_candidate_pixel_lin_ind) = soma_candidate_thickness;
-    soma_mask = image_thickness >= max(image_thickness(:))/4;
-    
-    image_edges = edge(im_filtered);
-    figure;imagesc(image_thickness);
-    figure;imshowpair(soma_mask,image_bin);
 end
 %% Define the pixel mass.
 % The pixel mass is used to find the clusters' center of mass. The center
@@ -605,7 +625,6 @@ if options.Waitbar
 end
 
 % Remove clusters that were not defined.
-%is_cluster_defined = ~isnan(Clusters_ID);
 is_cluster_defined = Clusters_ID > 0;
 Clusters_position = reshape(Clusters_position, [], 2);
 Clusters_position = Clusters_position(is_cluster_defined, :);
@@ -811,6 +830,6 @@ end
 Tree = resample_branches(Tree, options.Branch_nodes_distance);
 %% Plot the final tree structure overlaid on top of the image.
 if options.Plots && exist('plottree',2)
-    %plottree(Tree, 'Lengthscale', 1, 'BackgroundImage', {image_input, 1, Soma_PixelInd});
+    plottree(Tree, 'Lengthscale', 1, 'BackgroundImage', {image_input, 1, Soma_PixelInd});
 end
 end
