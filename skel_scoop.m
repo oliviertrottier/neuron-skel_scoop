@@ -147,14 +147,6 @@ if isa(options.Seed, 'char') && strcmp(options.Seed, 'Auto')
     
     % Change the seed linear index to a 2D index.
     seed_ind = [mod(seed_ind-1, image_size(1))+1, ceil(seed_ind/image_size(1))];
-    
-    % Plot the image with the seed mask.
-    if options.Plots
-        seed_mask = false(image_size);
-        seed_mask(seed_ind(1),seed_ind(2)) = true;
-        figure;imshowpair(image_input,seed_mask);
-    end
-    
 else
     seed_ind = options.Seed;
 end
@@ -652,9 +644,6 @@ Nodes_ParentID = Clusters_parentID;
 Nodes_ID = Clusters_ID;
 N_nodes = size(Nodes_Position, 1);
 
-% Define the position of the Soma as the first node position.
-SomaPos = Nodes_Position(1,:);
-
 % Redefine the Nodes_ID without gaps.
 New_Nodes_ID = (1:N_nodes)';
 Nodes_ParentID = rep(Nodes_ParentID, Nodes_ID, New_Nodes_ID);
@@ -822,6 +811,9 @@ if isfield(Tree,'Length_thres')
 end
 Tree = orderfields(Tree,{'PointsPos','PointsDiameter','Length','Length_dim','ParentID','SiblingID','ChildrenID','Depth'});
 %% Center Tree at the Soma.
+% Define the position of the Soma as the first node position.
+SomaPos = Nodes_Position(1,:);
+
 PositionOffset = options.SomaPos - SomaPos;
 for i = 1:numel(Tree)
     Tree(i).PointsPos = Tree(i).PointsPos + PositionOffset;
@@ -829,7 +821,7 @@ end
 %% Resample the branches' nodes at a constant rate.
 Tree = resample_branches(Tree, options.Branch_nodes_distance);
 %% Plot the final tree structure overlaid on top of the image.
-if options.Plots && exist('plottree',2)
+if options.Plots && exist('plottree','file')
     plottree(Tree, 'Lengthscale', 1, 'BackgroundImage', {image_input, 1, Soma_PixelInd});
 end
 end

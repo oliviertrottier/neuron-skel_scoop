@@ -32,7 +32,7 @@ for i=1:N_branches
         end
     end
     
-    % Resample the points positions.
+    % Resample the points's positions.
     PointsPos = Tree(i).PointsPos;
     if size(PointsPos,1) < 2
         error('Cannot resample with only one point.')
@@ -56,7 +56,7 @@ for i=1:N_branches
         New_stepsizes = sqrt(sum(diff(NewPointsPos).^2,2));
         are_steps_even = all(abs(New_stepsizes - stepsize) < 1e4*eps);
         if ~are_steps_even
-            % Interpolate with a user-define interpolation that ensures
+            % Interpolate with a user-defined interpolation that ensures
             % equal step sizes.
             NewPointsPos = interp_equi(PointsPos,stepsize);
             

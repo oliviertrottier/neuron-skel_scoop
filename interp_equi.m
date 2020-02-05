@@ -20,11 +20,17 @@ Segment_length_squared = Segment_length^2;
 distance_threshold = Segment_length_squared/2;
 
 % Find the starting position.
-% Find all points within a segment length of the first points and average
-% their position to define the starting position.
-squared_dists = sum(bsxfun(@minus,Points_position,Points_position(1,:)).^2,2);
+First_position_method = 'first_point';
+switch First_position_method
+    case 'first_point'
+        segment_start_pos = Points_position(1,:);
+    case 'average'
+        % Find all points within a segment length of the first points and average
+        % their position to define the starting position.
+        squared_dists = sum(bsxfun(@minus,Points_position,Points_position(1,:)).^2,2);
+        segment_start_pos = mean(Points_position(squared_dists < Segment_length_squared,:),1);
+end
 
-segment_start_pos = mean(Points_position(squared_dists < Segment_length_squared,:),1);
 Interpolated_line_positions(1,:) = segment_start_pos;
 segment_start_point_ind = 1;
 Points_ind = 2;
